@@ -1,42 +1,60 @@
 # La Tia POS - Complete Integration Guide
 
-## 🎯 Project Status
+## 🎯 Project Status - UPDATED
 
 ✅ **Complete Setup:**
-- React frontend connected to Laravel API service
+- React frontend **NOW FULLY CONNECTED** to Laravel API service
 - Laravel backend with all models, controllers, and routes
 - MySQL database fully configured with schema and seeders
-- All files pushed to GitHub
+- All API services integrated with automatic token management
+- Authentication system working
+- CRUD operations connected to database
 
 ---
 
 ## 🚀 Full Stack Architecture
 
 ```
-┌─────────────────┐
-│  React Frontend │ (Vite + TypeScript)
-│  Port: 5173     │
-└────────┬────────┘
-         │ HTTP/JSON
+┌──────────────────────────┐
+│  React Frontend (Vite)  │ (Port: 5173)
+│  - AdminPage.tsx        │
+│  - LoginPage.tsx        │
+│  - API Services (6)     │
+└────────┬─────────────────┘
+         │ HTTP/JSON (axios)
+         │ Token in headers
          ↓
-┌─────────────────┐
-│ Laravel API     │ (REST API)
-│ Port: 8000      │
-└────────┬────────┘
+┌──────────────────────────┐
+│  Laravel REST API        │ (Port: 8000)
+│  /api/v1                 │
+│  - Auth endpoints        │
+│  - Category routes       │
+│  - Product routes        │
+│  - Inventory routes      │
+│  - Sales routes          │
+│  - Dashboard routes      │
+└────────┬─────────────────┘
          │ SQL
          ↓
-┌─────────────────┐
-│ MySQL Database  │
-│ latia_pos       │
-└─────────────────┘
+┌──────────────────────────┐
+│  MySQL Database          │
+│  latia_pos               │
+│  - users table           │
+│  - categories table      │
+│  - products table        │
+│  - inventory_items table │
+│  - sales table           │
+└──────────────────────────┘
 ```
 
 ---
 
-## 🔧 Configuration Checklist
+## 🔧 Configuration
 
-### Frontend (.env or hardcoded)
-API endpoint: `http://localhost:8000/api/v1`
+### Frontend (.env)
+```env
+VITE_API_URL=http://localhost:8000/api/v1
+```
 
 ### Backend (.env)
 ```env
@@ -48,6 +66,54 @@ DB_USERNAME=root
 DB_PASSWORD=Nookie123
 APP_KEY=base64:...  # Already set
 ```
+
+---
+
+## 📦 API Services
+
+The frontend now includes 6 fully integrated API services:
+
+### 1. **authService** - User Authentication
+- `login(username, password)` - Authenticate user
+- `logout()` - Clear session and token
+- `getUser()` - Fetch current user info
+- `getStoredUser()` - Get user from localStorage
+- `isAuthenticated()` - Check auth status
+
+### 2. **categoryService** - Category Management
+- `getAll()` - Get all categories
+- `getById(id)` - Get specific category
+- `create(data)` - Create new category
+- `update(id, data)` - Update category
+- `delete(id)` - Delete category
+
+### 3. **productService** - Product/Item Management
+- `getAll()` - Get all products
+- `getById(id)` - Get specific product
+- `getByCategory(categoryId)` - Filter by category
+- `create(data)` - Create new product
+- `update(id, data)` - Update product
+- `delete(id)` - Delete product
+
+### 4. **inventoryService** - Inventory Management
+- `getAll()` - Get all inventory items
+- `getById(id)` - Get specific item
+- `create(data)` - Add inventory item
+- `update(id, data)` - Update quantity/details
+- `delete(id)` - Remove inventory item
+- `addMovement(id, data)` - Record stock movement
+
+### 5. **saleService** - Sales Operations
+- `getAll()` - Get all sales
+- `getById(id)` - Get specific sale
+- `create(data)` - Record new sale
+- `getSalesByDateRange()` - Get sales in date range
+- `getDailySales()` - Get today's sales
+- `recordPayment()` - Record payment
+
+### 6. **dashboardService** - Dashboard Analytics
+- `getStats()` - Get dashboard statistics
+- `getSalesTrend()` - Get sales trends
 
 ### Database
 - Host: `127.0.0.1:3306`
@@ -70,17 +136,223 @@ mysql -u root -pNookie123
 
 ### Step 2: Start Laravel Backend
 ```bash
-cd "C:\Users\User\Desktop\LaTiaLaravel\backend"
+cd "C:\Users\User\Desktop\LatiaBackend"
+
+# Install dependencies if not already done
+composer install
+
+# Run migrations if needed
+php artisan migrate:fresh --seed
+
+# Start the server
 php artisan serve --host=127.0.0.1 --port=8000
 ```
 ✅ Output: `Server running on [http://127.0.0.1:8000]`
 
-### Step 3: Start React Frontend (in new terminal)
+### Step 3: Install Frontend Dependencies
+```bash
+cd "c:\Users\User\Desktop\adminLaTiaPOS"
+
+# Install npm dependencies (including axios)
+npm install
+```
+
+### Step 4: Start React Frontend (in new terminal)
 ```bash
 cd "c:\Users\User\Desktop\adminLaTiaPOS"
 npm run dev
 ```
 ✅ Output: `VITE v... ready in ... ms`
+
+---
+
+## ✅ Testing the Integration
+
+### 1. Verify Backend is Running
+```bash
+# In your browser or terminal
+curl http://localhost:8000/api/v1/categories
+```
+Should return JSON response (may need auth token)
+
+### 2. Check Frontend Loads
+Open `http://localhost:5173` in browser
+You should see the login page
+
+### 3. Test Login
+- Navigate to login page
+- Use test credentials from database
+- On success, should redirect to admin page
+
+### 4. Test Category Creation
+1. Log in to admin panel
+2. Go to Items Management
+3. Add a new category
+4. Should appear in the list immediately
+
+### 5. Check API Calls
+1. Open browser DevTools (F12)
+2. Go to Network tab
+3. Perform an action (create category, item, etc.)
+4. Should see POST/GET requests to `http://localhost:8000/api/v1/...`
+
+---
+
+## 🔐 Authentication
+
+### How It Works
+1. User logs in with username/password
+2. Backend validates against MySQL `users` table
+3. Backend returns auth token
+4. Frontend stores token in localStorage as `auth_token`
+5. All subsequent requests include token in header
+
+### Token Format
+```
+Authorization: Bearer <token>
+```
+
+### Create Demo User (if needed)
+```sql
+USE latia_pos;
+INSERT INTO users (username, password_hash, email, full_name, role_id, is_active)
+VALUES ('admin', HASH('password123'), 'admin@latia.com', 'Admin User', 1, 1);
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### Problem: "Failed to connect to server"
+**Solution:**
+1. Verify MySQL is running
+2. Check Laravel is running on port 8000
+3. Verify database connection in backend .env
+4. Check `.env` in frontend has correct API URL
+
+### Problem: 401 Unauthorized
+**Solution:**
+1. Check user exists in database
+2. Verify password is correct
+3. Clear localStorage and try again
+4. Check token is being stored properly
+
+### Problem: API 404 errors
+**Solution:**
+1. Verify routes exist in `routes/api.php`
+2. Check route prefix is `/api/v1`
+3. Verify backend is running
+4. Check spelling of route names
+
+### Problem: Empty categories/products
+**Solution:**
+1. Run database migrations: `php artisan migrate:fresh --seed`
+2. Check data in MySQL database:
+   ```sql
+   SELECT * FROM categories;
+   SELECT * FROM products;
+   ```
+3. Verify API endpoints are returning data
+
+### Problem: CORS Errors
+**Solution:**
+May need to configure CORS in Laravel (already should be handled by default)
+Check if `fruitcake/laravel-cors` is installed
+
+---
+
+## 📝 Recent Changes
+
+### Frontend Updates:
+✅ Added axios library
+✅ Created 6 API service modules
+✅ Updated AdminPage.tsx with real API calls
+✅ Updated LoginPage.tsx with backend authentication
+✅ Added .env configuration
+✅ Implemented automatic token management
+✅ Added error handling and user feedback
+
+### Services Added:
+- `src/services/apiConfig.ts` - Axios configuration
+- `src/services/authService.ts` - Authentication
+- `src/services/categoryService.ts` - Categories
+- `src/services/productService.ts` - Products
+- `src/services/inventoryService.ts` - Inventory
+- `src/services/saleService.ts` - Sales
+- `src/services/dashboardService.ts` - Dashboard
+- `src/services/index.ts` - Export all services
+
+### Updated Components:
+- `src/pages/LoginPage.tsx` - Real authentication
+- `src/pages/AdminPage.tsx` - Real CRUD operations
+
+---
+
+## 🎯 What's Connected
+
+| Feature | Status |
+|---------|--------|
+| User Authentication | ✅ Connected |
+| Category Management | ✅ Connected |
+| Product Management | ✅ Connected |
+| Inventory Management | ✅ Connected |
+| Stock Movements | ✅ Ready |
+| Sales Recording | ✅ Ready |
+| Dashboard Stats | ✅ Ready |
+| User Logout | ✅ Connected |
+
+---
+
+## 📚 API Response Format
+
+All endpoints follow this format:
+
+**Success Response:**
+```json
+{
+  "success": true,
+  "message": "Operation successful",
+  "data": {
+    // Response data
+  }
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "message": "Error description"
+}
+```
+
+---
+
+## 🔍 Debugging Tips
+
+1. **Check Network Requests:**
+   - F12 > Network tab > Look for API calls
+   - Check request/response headers and body
+
+2. **Check Console Errors:**
+   - F12 > Console tab > Look for errors
+   - Click on error to see full details
+
+3. **Check Backend Logs:**
+   - Terminal where Laravel is running
+   - Look for SQL errors or exceptions
+
+4. **Check Database:**
+   ```sql
+   USE latia_pos;
+   SHOW TABLES;
+   SELECT * FROM categories;
+   DESC users;
+   ```
+
+---
+
+## 🚀 Next Steps
 
 ### Step 4: Access Application
 ```

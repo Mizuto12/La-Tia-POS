@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { productAPI, categoryAPI, inventoryAPI, salesAPI, authAPI, clearAuthToken } from "../services/api";
+import {
+  categoryService,
+  productService,
+  inventoryService,
+  authService,
+} from "../services";
+import { productImageService } from "../services/productImageService";
 import "./AdminPage.css";
 
 interface FoodItem {
@@ -11,6 +17,7 @@ interface FoodItem {
   cost: number;
   price: number;
   description: string;
+  image_path?: string;
 }
 
 interface FoodCategory {
@@ -58,6 +65,13 @@ function Admin() {
     quantity: "",
     unit: "",
   });
+  // Derived state to check for duplicate inventory items
+  const isInventoryDuplicate: boolean = Boolean(
+    newInventoryItem.name.trim() &&
+      inventory.some(
+        (item) => item.name.trim().toLowerCase() === newInventoryItem.name.trim().toLowerCase()
+      )
+  );
   const [showPaymentMethods, setShowPaymentMethods] = useState(false);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [inlineItemForm, setInlineItemForm] = useState({
@@ -96,7 +110,9 @@ function Admin() {
     [key: number]: Array<{ inventoryItemId: number; quantity: number }>;
   }>({});
   const [editingIngredientItemId, setEditingIngredientItemId] = useState<number | null>(null);
-  const [tempIngredients, setTempIngredients] = useState<Array<{ inventoryItemId: number; quantity: number }>>([]);
+  const [tempIngredients, setTempIngredients] = useState<Array<{ inventoryItemId: number; quantity: number; confirmed?: boolean }>>([]);
+  const [uploadingImageItemId, setUploadingImageItemId] = useState<number | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<number | null>(null);
 
   // Load data from API on component mount
   useEffect(() => {
@@ -105,73 +121,89 @@ function Admin() {
 
   const loadData = async () => {
     try {
-      // Load categories and products from API
-      const [categoriesRes, productsRes, inventoryRes, salesRes] = await Promise.all([
-        categoryAPI.getAll(),
-        productAPI.getAll(),
-        inventoryAPI.getAll(),
-        salesAPI.getToday(),
-      ]);
-
-      if (categoriesRes.success) {
-        setCategories(categoriesRes.data);
+      // Check if user is authenticated
+      if (!authService.isAuthenticated()) {
+        navigate("/");
+        return;
       }
 
-      let normalizedItems: FoodItem[] = [];
-      if (productsRes.success) {
-        // Normalize product shape from API: ensure `category` is the category name (string)
-        normalizedItems = productsRes.data.map((p: any) => ({
-          id: p.id,
-          name: p.name,
-          // make sure category_id is a number (API may return string)
-          category_id: Number(p.category_id),
-          category: p.category?.name ?? (typeof p.category === 'string' ? p.category : ''),
-          cost: typeof p.cost === 'string' ? parseFloat(p.cost) : p.cost,
-          price: typeof p.price === 'string' ? parseFloat(p.price) : p.price,
-          description: p.description ?? '',
-        }));
+      // Load categories
+      const categoriesData = await categoryService.getAll();
+      setCategories(categoriesData);
 
-        // Clean up orphaned items (items without a category) before setting
-        const orphanedItems = normalizedItems.filter((item) => !item.category || !item.category.trim());
-        if (orphanedItems.length > 0) {
-          await deleteOrphanedItems(orphanedItems);
-          // Remove orphaned items from the normalized list
-          normalizedItems = normalizedItems.filter((item) => item.category && item.category.trim());
-        }
+      // Load products
+      const productsData = await productService.getAll();
+      // Map backend products to frontend FoodItem format
+      const mappedItems = productsData.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        category_id: p.category_id,
+        category: p.category?.name || "",
+        cost: p.cost,
+        price: p.price,
+        description: p.description || "",
+        image_path: p.image_path || "",
+      }));
+      setItems(mappedItems);
 
-        setItems(normalizedItems);
-      }
+      // Load inventory
+      const inventoryData = await inventoryService.getAll();
+      setInventory(inventoryData);
 
-      if (inventoryRes.success) {
-        setInventory(inventoryRes.data);
-      }
-
-      if (salesRes.success) {
-        // Convert sales data to transaction format
-        const txns = salesRes.data.sales?.map((sale: any) => ({
-          id: sale.id,
-          itemName: sale.saleItems?.[0]?.name || "Sale",
-          quantity: sale.saleItems?.reduce((sum: number, item: any) => sum + item.quantity, 0) || 0,
-          amount: sale.total,
-          paymentMethod: sale.payments?.[0]?.method || "unknown",
-          date: new Date(sale.created_at),
-          cost: sale.saleItems?.reduce((sum: number, item: any) => sum + item.cost, 0) || 0,
-        })) || [];
-        setTransactions(txns);
-      }
+      // Load ingredients for all products from backend
+      await loadProductIngredients(mappedItems);
     } catch (error) {
       console.error("Failed to load data:", error);
+      // If unauthorized, redirect to login
+      if ((error as any).response?.status === 401) {
+        navigate("/");
+      }
     }
+  };
+
+  const loadProductIngredients = async (products: FoodItem[]) => {
+    const ingredientsMap: { [key: number]: Array<{ inventoryItemId: number; quantity: number }> } = {};
+    
+    try {
+      // Get all product IDs
+      const productIds = products.map(p => p.id);
+      
+      // Fetch ALL ingredients in a single batch request
+      const batchIngredients = await productService.getMultipleIngredients(productIds);
+      
+      // Convert the response format
+      Object.entries(batchIngredients).forEach(([productId, ingredients]: any) => {
+        ingredientsMap[parseInt(productId)] = ingredients.map((ing: any) => ({
+          inventoryItemId: ing.inventory_item_id,
+          quantity: parseFloat(ing.quantity.toString()),
+        }));
+      });
+      
+      // Initialize products without ingredients
+      products.forEach((product) => {
+        if (!ingredientsMap[product.id]) {
+          ingredientsMap[product.id] = [];
+        }
+      });
+    } catch (error) {
+      console.error("Failed to load product ingredients:", error);
+      // Initialize with empty ingredients if fetch fails
+      products.forEach((product) => {
+        ingredientsMap[product.id] = [];
+      });
+    }
+    
+    setItemIngredients(ingredientsMap);
   };
 
   const handleLogout = async () => {
     try {
-      await authAPI.logout();
+      await authService.logout();
+      navigate("/");
     } catch (error) {
       console.error("Logout error:", error);
+      navigate("/");
     }
-    clearAuthToken();
-    navigate("/");
   };
 
   const togglePaymentMethod = (method: keyof typeof paymentMethods) => {
@@ -193,13 +225,15 @@ function Admin() {
 
     setIsAddingCategory(true);
     try {
-      const response = await categoryAPI.create({ name });
-      if (response.success) {
-        setCategories([...categories, response.data]);
-        setNewCategory("");
-      }
-    } catch (error) {
+      const newCat = await categoryService.create({
+        name,
+        description: "",
+      });
+      setCategories([...categories, newCat]);
+      setNewCategory("");
+    } catch (error: any) {
       console.error("Failed to add category:", error);
+      alert(error.response?.data?.message || "Failed to add category");
     } finally {
       setIsAddingCategory(false);
     }
@@ -208,30 +242,34 @@ function Admin() {
   const confirmDeleteCategory = async (id: number) => {
     setDeleteConfirmId(null);
     try {
-      await categoryAPI.delete(id);
+      await categoryService.delete(id);
       setCategories(categories.filter((cat) => cat.id !== id));
       // Also remove items from this category (ensure numeric comparison)
       setItems(
         items.filter((item) => Number(item.category_id) !== id)
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to delete category:", error);
+      alert(error.response?.data?.message || "Failed to delete category");
     }
   };
 
   const confirmEditCategory = async (newName: string) => {
     if (editConfirmData && newName.trim()) {
       try {
-        await categoryAPI.update(editConfirmData.id, { name: newName });
-        // Update the category name
+        const updatedCat = await categoryService.update(editConfirmData.id, {
+          name: newName,
+          description: "",
+        });
         setCategories(
           categories.map((cat) =>
-            cat.id === editConfirmData.id ? { ...cat, name: newName } : cat
+            cat.id === editConfirmData.id ? updatedCat : cat
           )
         );
         setEditConfirmData(null);
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to update category:", error);
+        alert(error.response?.data?.message || "Failed to update category");
       }
     }
   };
@@ -246,26 +284,24 @@ function Admin() {
 
   const confirmDeleteItem = async (id: number) => {
     try {
-      const res: any = await productAPI.delete(id);
-      if (res && res.success) {
-        setItems(items.filter((item) => item.id !== id));
-        setItemDeleteConfirmId(null);
-        setDeleteConfirmItemName("");
-      } else {
-        console.error('Failed to delete item:', res);
-      }
-    } catch (error) {
+      await productService.delete(id);
+      setItems(items.filter((item) => item.id !== id));
+      setItemDeleteConfirmId(null);
+      setDeleteConfirmItemName("");
+    } catch (error: any) {
       console.error('Error deleting item:', error);
+      alert(error.response?.data?.message || "Failed to delete item");
     }
   };
 
   const deleteOrphanedItems = async (itemsToDelete: FoodItem[]) => {
-    for (const item of itemsToDelete) {
-      try {
-        await productAPI.delete(item.id);
-      } catch (error) {
-        console.error(`Failed to delete orphaned item ${item.id}:`, error);
+    // Delete orphaned items (products without categories) via API
+    try {
+      for (const item of itemsToDelete) {
+        await productService.delete(item.id);
       }
+    } catch (error) {
+      console.error("Error deleting orphaned items:", error);
     }
   };
 
@@ -284,31 +320,31 @@ function Admin() {
       return;
     }
     try {
-      const payload = {
+      const updatedItem = await productService.update(editingItemData.id, {
         name: editingItemData.name,
-        cost: parseFloat(String(editingItemData.cost)),
-        price: parseFloat(String(editingItemData.price)),
-      };
-      const res: any = await productAPI.update(editingItemData.id, payload);
-      if (res && res.success) {
-        setItems(
-          items.map((item) =>
-            item.id === editingItemData.id
-              ? {
-                  ...item,
-                  name: editingItemData.name,
-                  cost: editingItemData.cost,
-                  price: editingItemData.price,
-                }
-              : item
-          )
-        );
-        setEditingItemData(null);
-      } else {
-        console.error('Failed to update item:', res);
-      }
-    } catch (error) {
+        cost: editingItemData.cost,
+        price: editingItemData.price,
+        category_id: items.find(i => i.id === editingItemData.id)?.category_id || 1,
+        description: items.find(i => i.id === editingItemData.id)?.description || "",
+      });
+
+      // Map backend response to frontend format
+      setItems(
+        items.map((item) =>
+          item.id === editingItemData.id
+            ? {
+                ...item,
+                name: updatedItem.name,
+                cost: updatedItem.cost,
+                price: updatedItem.price,
+              }
+            : item
+        )
+      );
+      setEditingItemData(null);
+    } catch (error: any) {
       console.error('Error updating item:', error);
+      alert(error.response?.data?.message || "Failed to update item");
     }
   };
 
@@ -317,12 +353,102 @@ function Admin() {
     setTempIngredients([...(itemIngredients[itemId] || [])]);
   };
 
-  const saveItemIngredients = () => {
+  const saveItemIngredients = async () => {
     if (editingIngredientItemId !== null) {
-      setItemIngredients({ ...itemIngredients, [editingIngredientItemId]: tempIngredients });
-      setEditingIngredientItemId(null);
-      setTempIngredients([]);
+      try {
+        // Filter out incomplete entries
+        const validIngredients = tempIngredients.filter(
+          ing => ing.inventoryItemId && ing.quantity > 0
+        );
+
+        // Save ingredients to backend
+        const ingredientsToSave = validIngredients.map(ing => ({
+          inventory_item_id: ing.inventoryItemId,
+          quantity: ing.quantity,
+        }));
+
+        await productService.saveIngredients(editingIngredientItemId, ingredientsToSave);
+        
+        // Update state with validated ingredients
+        setItemIngredients({ 
+          ...itemIngredients, 
+          [editingIngredientItemId]: validIngredients 
+        });
+        
+        setEditingIngredientItemId(null);
+        setTempIngredients([]);
+        
+        // Show success message
+        alert("Ingredients linked successfully!");
+      } catch (error: any) {
+        console.error("Error saving ingredients:", error);
+        alert(error.response?.data?.message || "Error saving ingredients");
+      }
     }
+  };
+
+  const handleImageUpload = async (itemId: number, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file');
+      return;
+    }
+
+    setUploadingImageItemId(itemId);
+    try {
+      const result = await productImageService.uploadImage(itemId, file);
+      
+      // Update items state with new image path
+      setItems(
+        items.map((item) =>
+          item.id === itemId
+            ? { ...item, image_path: result.image_path }
+            : item
+        )
+      );
+      
+      alert('Image uploaded successfully!');
+    } catch (error: any) {
+      console.error('Error uploading image:', error);
+      alert(error.message || 'Failed to upload image');
+    } finally {
+      setUploadingImageItemId(null);
+    }
+  };
+
+  const handlePictureDrop = (e: React.DragEvent<HTMLDivElement>, itemId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverItemId(null);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleImageUpload(itemId, files[0]);
+    }
+  };
+
+  const handlePictureDragOver = (e: React.DragEvent<HTMLDivElement>, itemId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverItemId(itemId);
+  };
+
+  const handlePictureDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverItemId(null);
+  };
+
+  const handlePictureClick = (itemId: number) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e: any) => {
+      const file = e.target.files[0];
+      if (file) {
+        handleImageUpload(itemId, file);
+      }
+    };
+    input.click();
   };
 
   const addInventoryItem = async () => {
@@ -337,21 +463,17 @@ function Admin() {
 
     setIsSavingInventory(true);
     try {
-      const payload = {
+      const newItem = await inventoryService.create({
         name: newInventoryItem.name,
         quantity: parseFloat(newInventoryItem.quantity),
         unit: newInventoryItem.unit,
-      };
-      const res: any = await inventoryAPI.create(payload);
-      if (res && res.success) {
-        // Use the actual database-created item with real ID
-        setInventory([...inventory, res.data]);
-        setNewInventoryItem({ name: "", quantity: "", unit: "" });
-      } else {
-        console.error('Failed to create inventory item:', res);
-      }
-    } catch (error) {
+        reorder_level: 10,
+      });
+      setInventory([...inventory, newItem]);
+      setNewInventoryItem({ name: "", quantity: "", unit: "" });
+    } catch (error: any) {
       console.error('Error saving inventory item:', error);
+      alert(error.response?.data?.message || "Failed to add inventory item");
     } finally {
       setIsSavingInventory(false);
     }
@@ -359,14 +481,11 @@ function Admin() {
 
   const deleteInventoryItem = async (id: number) => {
     try {
-      const res: any = await inventoryAPI.delete(id);
-      if (res && res.success) {
-        setInventory(inventory.filter((item) => item.id !== id));
-      } else {
-        console.error('Failed to delete inventory item:', res);
-      }
-    } catch (error) {
+      await inventoryService.delete(id);
+      setInventory(inventory.filter((item) => item.id !== id));
+    } catch (error: any) {
       console.error('Error deleting inventory item:', error);
+      alert(error.response?.data?.message || "Failed to delete inventory item");
     }
   };
 
@@ -387,35 +506,32 @@ function Admin() {
           return;
         }
 
-        const payload = {
+        // Create product via API
+        const newProduct = await productService.create({
           name: inlineItemForm.name,
-          category_id: Number(categoryObj.id),
+          category_id: categoryObj.id,
           cost: parseFloat(inlineItemForm.cost),
           price: parseFloat(inlineItemForm.price),
-          description: "",
-        };
+          description: '',
+        });
 
-        const res: any = await productAPI.create(payload);
-        // API returns created product in res.data
-        if (res && res.success) {
-          const p = res.data;
-          const normalized: FoodItem = {
-            id: p.id,
-            name: p.name,
-            category_id: p.category_id,
-            category: categoryObj.name,
-            cost: typeof p.cost === 'string' ? parseFloat(p.cost) : p.cost,
-            price: typeof p.price === 'string' ? parseFloat(p.price) : p.price,
-            description: p.description ?? '',
-          };
-          setItems([...items, normalized]);
-          setInlineItemForm({ name: "", cost: "", price: "" });
-          setEditingCategoryId(null);
-        } else {
-          console.error('Failed to create product', res);
-        }
-      } catch (error) {
+        // Map to FoodItem format
+        const normalized: FoodItem = {
+          id: newProduct.id,
+          name: newProduct.name,
+          category_id: newProduct.category_id,
+          category: categoryObj.name,
+          cost: newProduct.cost,
+          price: newProduct.price,
+          description: newProduct.description || '',
+          image_path: newProduct.image_path || '',
+        };
+        setItems([...items, normalized]);
+        setInlineItemForm({ name: "", cost: "", price: "" });
+        setEditingCategoryId(null);
+      } catch (error: any) {
         console.error('Error saving item:', error);
+        alert(error.response?.data?.message || "Failed to create item");
       } finally {
         setIsSavingItem(false);
       }
@@ -423,10 +539,10 @@ function Admin() {
   };
 
   const navItems = [
-    { id: "dashboard", label: "Dashboard" },
-    { id: "items", label: "Items" },
-    { id: "inventory", label: "Inventory" },
-    { id: "reports", label: "Reports" },
+    { id: "dashboard", label: "Dashboard", icon: "📊" },
+    { id: "items", label: "Items", icon: "🍽️" },
+    { id: "inventory", label: "Inventory", icon: "📦" },
+    { id: "reports", label: "Reports", icon: "📈" },
   ];
 
   // Reports helper functions
@@ -684,6 +800,7 @@ function Admin() {
                 className={`nav-btn ${currentPage === item.id ? "active" : ""}`}
                 onClick={() => setCurrentPage(item.id)}
               >
+                <span className="nav-icon">{item.icon}</span>
                 {item.label}
               </button>
             ))}
@@ -783,11 +900,16 @@ function Admin() {
                     <button
                       onClick={addInventoryItem}
                       className="add-ingredient-btn"
-                      disabled={isSavingInventory}
-                      title="Add new ingredient to inventory"
+                      disabled={isSavingInventory || isInventoryDuplicate}
+                      title={isInventoryDuplicate ? "This ingredient already exists" : "Add new ingredient to inventory"}
                     >
                       {isSavingInventory ? "ADDING..." : "ADD INGREDIENT"}
                     </button>
+                    {isInventoryDuplicate && (
+                      <div className="duplicate-warning">
+                        This ingredient already exists in inventory
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -813,7 +935,6 @@ function Admin() {
                           >
                             🗑
                           </span>
-                          <span className="duplicate-icon">📋</span>
                           <span className="item-name">{item.name}</span>
                         </div>
                         <div className="col-beginning"><span>0</span></div>
@@ -846,7 +967,7 @@ function Admin() {
                             <div key={item.id} className="ingredient-item-row">
                               <div className="ingredient-item-info">
                                 <div className="ingredient-item-name">{item.name}</div>
-                                <div className="ingredient-item-price">₱{item.price.toFixed(2)}</div>
+                                <div className="ingredient-item-price">₱{parseFloat(String(item.price)).toFixed(2)}</div>
                               </div>
                               <div className="ingredient-inventory-selector">
                                 {editingIngredientItemId === item.id ? (
@@ -854,7 +975,15 @@ function Admin() {
                                     <div className="inventory-selections">
                                       {tempIngredients.map((ing, idx) => {
                                         return (
-                                          <div key={idx} className="inventory-selection">
+                                          <div 
+                                            key={idx} 
+                                            className="inventory-selection"
+                                            style={{
+                                              backgroundColor: ing.confirmed ? "#f0f0f0" : "transparent",
+                                              opacity: ing.confirmed ? 0.7 : 1,
+                                              transition: "all 0.3s ease",
+                                            }}
+                                          >
                                             <input
                                               type="text"
                                               list={`inventory-list-${item.id}`}
@@ -869,6 +998,7 @@ function Admin() {
                                               placeholder="Search or type ingredient..."
                                               className="inventory-select"
                                               autoComplete="off"
+                                              disabled={ing.confirmed}
                                             />
                                             <datalist id={`inventory-list-${item.id}`}>
                                               {inventory.map((inv) => (
@@ -887,6 +1017,7 @@ function Admin() {
                                               }}
                                               placeholder="0"
                                               className="quantity-input"
+                                              disabled={ing.confirmed}
                                             />
                                             <button
                                               onClick={() => {
@@ -897,6 +1028,33 @@ function Admin() {
                                               title="Remove ingredient"
                                             >
                                               ×
+                                            </button>
+                                            <button
+                                              onClick={() => {
+                                                // Confirm ingredient - validate that both fields are filled
+                                                if (ing.inventoryItemId && ing.quantity > 0) {
+                                                  const newIngs = [...tempIngredients];
+                                                  newIngs[idx].confirmed = !newIngs[idx].confirmed;
+                                                  setTempIngredients(newIngs);
+                                                } else {
+                                                  alert("Please fill in both ingredient name and quantity");
+                                                }
+                                              }}
+                                              className="confirm-ingredient-btn"
+                                              title={ing.confirmed ? "Unconfirm ingredient" : "Confirm ingredient"}
+                                              style={{
+                                                backgroundColor: ing.confirmed ? "#4CAF50" : "#ccc",
+                                                border: "none",
+                                                color: "white",
+                                                padding: "5px 10px",
+                                                borderRadius: "4px",
+                                                cursor: ing.inventoryItemId && ing.quantity > 0 ? "pointer" : "not-allowed",
+                                                fontSize: "16px",
+                                                marginLeft: "5px",
+                                              }}
+                                              disabled={!ing.inventoryItemId || ing.quantity <= 0}
+                                            >
+                                              ✓
                                             </button>
                                           </div>
                                         );
@@ -955,7 +1113,6 @@ function Admin() {
 
             {inventoryView === "ingredients" && (
               <div className="inventory-content">
-                <p>Link Ingredients - Coming Soon</p>
               </div>
             )}
           </div>
@@ -1114,7 +1271,30 @@ function Admin() {
                           .filter((item) => item.category === category.name)
                           .map((item) => (
                             <div key={item.id} className="category-item-row">
-                              <div className="item-pic-placeholder">Drop Picture Here</div>
+                              <div
+                                className={`item-pic-placeholder ${dragOverItemId === item.id ? 'drag-over' : ''}`}
+                                onDragOver={(e) => handlePictureDragOver(e, item.id)}
+                                onDragLeave={handlePictureDragLeave}
+                                onDrop={(e) => handlePictureDrop(e, item.id)}
+                                onClick={() => handlePictureClick(item.id)}
+                                style={{ cursor: 'pointer', position: 'relative', overflow: 'hidden' }}
+                              >
+                                {uploadingImageItemId === item.id ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: '12px' }}>
+                                    Uploading...
+                                  </div>
+                                ) : item.image_path ? (
+                                  <img 
+                                    src={`http://localhost:8000/storage/${item.image_path}`}
+                                    alt={item.name}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                  />
+                                ) : (
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                                    Drop Picture Here
+                                  </div>
+                                )}
+                              </div>
                               <div className="item-name">{item.name}</div>
                               <input
                                 type="number"

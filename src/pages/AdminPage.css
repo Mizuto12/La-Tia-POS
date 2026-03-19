@@ -52,6 +52,11 @@
   padding-left: 13px;
 }
 
+.nav-icon {
+  margin-right: 8px;
+  font-size: 16px;
+}
+
 .nav-footer {
   display: flex;
   flex-direction: column;
@@ -521,6 +526,20 @@
   color: #999;
   text-align: center;
   flex-shrink: 0;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.item-pic-placeholder:hover {
+  background-color: #e8dfd8;
+  border-color: #a68361;
+}
+
+.item-pic-placeholder.drag-over {
+  background-color: #d4cfc6;
+  border-color: #a68361;
+  box-shadow: inset 0 0 6px rgba(166, 131, 97, 0.3);
 }
 
 .item-name {
@@ -2159,4 +2178,11 @@
 .edit-ingredients-btn:hover {
   background: #2980b9;
   transform: scale(1.05);
+}
+
+.duplicate-warning {
+  color: #e74c3c;
+  font-size: 13px;
+  margin-top: 4px;
+  margin-left: 4px;
 }

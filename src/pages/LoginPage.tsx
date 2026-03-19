@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authAPI, setAuthToken } from "../services/api";
+import { authService } from "../services";
 import "./LoginPage.css";
 
 function App() {
@@ -20,18 +20,18 @@ function App() {
     setError("");
 
     try {
-      const response = await authAPI.login(username, password);
-
+      const response = await authService.login(username, password);
+      
       if (response.success) {
-        // Store the token
-        setAuthToken(response.data.token);
         // Navigate to admin page
         navigate("/admin");
       } else {
         setError(response.message || "Login failed");
       }
     } catch (err: any) {
-      setError(err.message || "An error occurred during login");
+      const errorMessage = err.response?.data?.message || "Failed to connect to server. Please check your connection.";
+      setError(errorMessage);
+      console.error("Login error:", err);
     } finally {
       setLoading(false);
     }
